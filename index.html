@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Office Floor Map Navigator</title>
+
+    <link rel="stylesheet" href="style.css">
+
+    <!-- PDF.js -->
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+   <script src="app.js"></script>
+</head>
+
+<body>
+
+<!-- Toast Message -->
+<div id="toast" class="toast"></div>
+
+
+<!-- ================= HEADER ================= -->
+
+<header class="topbar">
+
+    <div class="brand">
+
+        <div class="brand-icon">
+            ⌖
+        </div>
+
+        <div>
+            <strong>Office Map Navigator</strong>
+            <small>Floor Plans & Location Search</small>
+        </div>
+
+    </div>
+
+
+    <nav>
+
+        <button
+            class="nav-btn active"
+            data-page="home"
+            onclick="showPage('home')">
+            Home
+        </button>
+
+        <button
+            class="nav-btn"
+            data-page="admin"
+            onclick="showPage('admin')">
+            Admin
+        </button>
+
+    </nav>
+
+</header>
+
+
+
+<main>
+
+
+<!-- ================= HOME PAGE ================= -->
+
+<section id="homePage" class="page active">
+
+    <div class="hero">
+
+        <div>
+
+            <span class="eyebrow">
+                OFFICE WAYFINDING
+            </span>
+
+            <h1>
+                Find any place on your office floor map.
+            </h1>
+
+            <p>
+                Select a floor plan, open it in the PDF viewer,
+                and search for a room, area, equipment code or
+                office location.
+            </p>
+
+        </div>
+
+
+        <div class="hero-card">
+
+            <span
+                class="hero-number"
+                id="mapCount">
+                0
+            </span>
+
+            <span>
+                Maps Available
+            </span>
+
+        </div>
+
+    </div>
+
+
+
+    <!-- Empty State -->
+
+    <div
+        id="emptyState"
+        class="empty-state">
+
+        <div class="empty-icon">
+            ▧
+        </div>
+
+        <h2>
+            No maps added yet
+        </h2>
+
+        <p>
+            Sign in as Admin and upload your first
+            floor-plan PDF.
+        </p>
+
+        <button
+            class="primary"
+            onclick="showPage('admin')">
+
+            Open Admin
+
+        </button>
+
+    </div>
+
+
+
+    <!-- Maps -->
+
+    <div
+        id="mapGrid"
+        class="map-grid">
+    </div>
+
+</section>
+
+
+
+
+<!-- ================= VIEWER PAGE ================= -->
+
+<section id="viewerPage" class="page">
+
+    <div class="viewer-shell">
+
+
+        <!-- Viewer Header -->
+
+        <div class="viewer-head">
+
+            <div>
+
+                <button
+                    class="back-btn"
+                    onclick="showPage('home')">
+
+                    ← Back to Maps
+
+                </button>
+
+                <h2 id="viewerTitle">
+                    Floor Map
+                </h2>
+
+            </div>
+
+
+            <div class="viewer-actions">
+
+                <button onclick="changeZoom(-0.05)">
+                    −
+                </button>
+
+                <span id="zoomLabel">
+                    100%
+                </span>
+
+                <button onclick="changeZoom(0.05)">
+                    +
+                </button>
+
+                <button
+                    class="icon-btn"
+                    onclick="rotateMap(-90)"
+                    title="Rotate map left"
+                    aria-label="Rotate map left">
+                    ↺
+                </button>
+
+                <button
+                    class="icon-btn"
+                    onclick="rotateMap(90)"
+                    title="Rotate map right"
+                    aria-label="Rotate map right">
+                    ↻
+                </button>
+
+                <button onclick="fitWidth()">
+                    Fit Width
+                </button>
+
+                <button
+                    class="icon-btn"
+                    onclick="toggleMapEnhancement()"
+                    title="Enhance map visibility"
+                    aria-label="Enhance map visibility">
+                    ◐
+                </button>
+
+                <button
+                    class="icon-btn"
+                    onclick="toggleMapFullscreen()"
+                    title="Enter fullscreen map"
+                    aria-label="Enter fullscreen map">
+                    ⛶
+                </button>
+
+            </div>
+
+        </div>
+
+
+
+        <!-- Search -->
+
+        <div class="searchbar">
+
+            <span>
+                ⌕
+            </span>
+
+            <input
+                id="placeSearch"
+                type="search"
+                placeholder="Search room, area, equipment code..."
+                autocomplete="off">
+
+            <div
+                id="searchSuggestions"
+                class="search-suggestions hidden">
+            </div>
+
+            <button
+                onclick="searchPlace()">
+
+                Search
+
+            </button>
+
+            <button
+                class="clear-btn"
+                onclick="clearSearch()">
+
+                Clear
+
+            </button>
+
+        </div>
+
+
+
+        <!-- Search Results -->
+
+        <div
+            id="searchResults"
+            class="search-results hidden">
+        </div>
+
+
+
+        <!-- PDF Area -->
+
+        <div
+            id="pdfViewport"
+            class="pdf-viewport">
+
+            <div
+                id="canvasWrap"
+                class="canvas-wrap">
+
+                <canvas id="pdfCanvas">
+                </canvas>
+
+                <div
+                    id="markerLayer">
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+
+
+<!-- ================= ADMIN PAGE ================= -->
+
+<section id="adminPage" class="page">
+
+
+    <!-- LOGIN -->
+
+    <div
+        id="adminLogin"
+        class="auth-card">
+
+        <div class="auth-icon">
+            🔐
+        </div>
+
+        <h1>
+            Admin Login
+        </h1>
+
+        <p>
+            Manage the floor-plan maps available
+            to employees.
+        </p>
+
+
+        <form
+            onsubmit="adminLoginSubmit(event)">
+
+            <label>
+                Username
+            </label>
+
+            <input
+                id="adminUsername"
+                value="admin"
+                required>
+
+
+            <label>
+                Password
+            </label>
+
+            <input
+                id="adminPassword"
+                type="password"
+                placeholder="Enter password"
+                required>
+
+
+            <button
+                class="primary full"
+                type="submit">
+
+                Sign In
+
+            </button>
+
+        </form>
+
+    </div>
+
+
+
+    <!-- ADMIN DASHBOARD -->
+
+    <div
+        id="adminPanel"
+        class="admin-panel hidden">
+
+
+        <div class="admin-head">
+
+            <div>
+
+                <span class="eyebrow">
+                    ADMIN PANEL
+                </span>
+
+                <h1>
+                    Manage Floor Maps
+                </h1>
+
+                <p>
+                    Upload PDF floor plans.
+                    PDF text will automatically become
+                    searchable.
+                </p>
+
+            </div>
+
+
+            <button
+                class="secondary"
+                onclick="adminLogout()">
+
+                Logout
+
+            </button>
+
+        </div>
+
+
+
+        <!-- UPLOAD -->
+
+        <div class="upload-card">
+
+
+            <div class="upload-icon">
+                ↑
+            </div>
+
+
+            <div>
+
+                <h2>
+                    Add a Floor Map
+                </h2>
+
+                <p>
+                    Upload your office floor-plan PDF.
+                </p>
+
+            </div>
+
+
+            <div class="upload-fields">
+
+                <input
+                    id="mapName"
+                    placeholder="Map name, e.g. TS Block - First Floor">
+
+
+                <input
+                    id="mapFile"
+                    type="file"
+                    accept="application/pdf,.pdf">
+
+
+                <button
+                    class="primary"
+                    onclick="addMap()">
+
+                    Add Map
+
+                </button>
+
+            </div>
+
+        </div>
+
+
+
+        <!-- MAP LIST -->
+
+        <div class="admin-table-wrap">
+
+            <h2>
+                Uploaded Maps
+            </h2>
+
+            <div id="adminMapList">
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+</main>
+
+
+
+<footer>
+
+    Office Map Navigator ·
+    HTML + CSS + JavaScript ·
+    PDF.js
+
+</footer>
+
+
+<script src="app.js"></script>
+
+</body>
+</html>
