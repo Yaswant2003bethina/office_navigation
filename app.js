@@ -27,6 +27,8 @@ let currentPage = 1;
 let zoom = 1;
 let rotation = 0;
 let activeRenderTask = null;
+let pinchStartDistance = null;
+let pinchStartZoom = null;
 
 const MAX_ZOOM = 5;
 
@@ -844,16 +846,23 @@ async function getTextItems(
    ZOOM IN / OUT
    ========================================================= */
 
+function clampZoom(value) {
+
+    return Math.max(
+        0.35,
+        Math.min(
+            MAX_ZOOM,
+            value
+        )
+    );
+
+}
+
 function changeZoom(delta) {
 
-    zoom =
-        Math.max(
-            0.35,
-            Math.min(
-                MAX_ZOOM,
-                zoom + delta
-            )
-        );
+    zoom = clampZoom(
+        zoom + delta
+    );
 
     renderPage(currentPage);
 
@@ -1592,8 +1601,94 @@ function showMarkerForResult(result) {
 
 
 /* =========================================================
-   MAP MOUSE ZOOM
+   MAP TOUCH / MOUSE ZOOM
    ========================================================= */
+
+document.addEventListener(
+    "touchstart",
+    function (event) {
+
+        const viewport =
+            event.target.closest(
+                "#pdfViewport"
+            );
+
+        if (
+            !viewport ||
+            !pdfDoc ||
+            event.touches.length !== 2
+        ) {
+            return;
+        }
+
+        const touchA = event.touches[0];
+        const touchB = event.touches[1];
+
+        pinchStartDistance =
+            Math.hypot(
+                touchB.clientX - touchA.clientX,
+                touchB.clientY - touchA.clientY
+            );
+
+        pinchStartZoom = zoom;
+
+    },
+    { passive: true }
+);
+
+document.addEventListener(
+    "touchmove",
+    function (event) {
+
+        const viewport =
+            event.target.closest(
+                "#pdfViewport"
+            );
+
+        if (
+            !viewport ||
+            !pdfDoc ||
+            event.touches.length !== 2 ||
+            pinchStartDistance === null ||
+            pinchStartZoom === null
+        ) {
+            return;
+        }
+
+        event.preventDefault();
+
+        const touchA = event.touches[0];
+        const touchB = event.touches[1];
+        const currentDistance =
+            Math.hypot(
+                touchB.clientX - touchA.clientX,
+                touchB.clientY - touchA.clientY
+            );
+
+        const ratio =
+            currentDistance /
+            pinchStartDistance;
+
+        zoom = clampZoom(
+            pinchStartZoom * ratio
+        );
+
+        renderPage(currentPage);
+
+    },
+    { passive: false }
+);
+
+document.addEventListener(
+    "touchend",
+    function () {
+
+        pinchStartDistance = null;
+        pinchStartZoom = null;
+
+    },
+    { passive: true }
+);
 
 document.addEventListener(
     "wheel",
