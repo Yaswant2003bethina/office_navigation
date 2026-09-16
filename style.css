@@ -769,6 +769,10 @@ main {
         rgba(0,0,0,.35);
 
     contain: layout paint;
+
+    transform-origin: center top;
+
+    will-change: transform;
 }
 
 

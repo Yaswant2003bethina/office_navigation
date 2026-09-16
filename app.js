@@ -30,7 +30,6 @@ let activeRenderTask = null;
 let zoomRenderTimer = null;
 let pinchStartDistance = null;
 let pinchStartZoom = null;
-let pinchRenderFrame = null;
 
 const MAX_ZOOM = 5;
 
@@ -891,6 +890,19 @@ function scheduleZoomRender() {
 
 }
 
+function clearPinchPreview() {
+
+    const canvasWrap =
+        document.getElementById("canvasWrap");
+
+    if (canvasWrap) {
+
+        canvasWrap.style.transform = "";
+
+    }
+
+}
+
 
 /* =========================================================
    ROTATE MAP
@@ -1657,6 +1669,8 @@ document.addEventListener(
 
         pinchStartZoom = zoom;
 
+        clearPinchPreview();
+
     },
     { passive: false }
 );
@@ -1698,14 +1712,13 @@ document.addEventListener(
             pinchStartZoom * ratio
         );
 
-        if (pinchRenderFrame === null) {
+        const canvasWrap =
+            document.getElementById("canvasWrap");
 
-            pinchRenderFrame = requestAnimationFrame(function () {
+        if (canvasWrap) {
 
-                pinchRenderFrame = null;
-                scheduleZoomRender();
-
-            });
+            canvasWrap.style.transform =
+                "scale(" + zoom / pinchStartZoom + ")";
 
         }
 
@@ -1713,12 +1726,35 @@ document.addEventListener(
     { passive: false }
 );
 
+function finishPinch(commitZoom) {
+
+    if (pinchStartZoom === null) {
+        return;
+    }
+
+    if (!commitZoom) {
+
+        zoom = pinchStartZoom;
+
+    }
+
+    pinchStartDistance = null;
+    pinchStartZoom = null;
+    clearPinchPreview();
+
+    if (commitZoom) {
+
+        scheduleZoomRender();
+
+    }
+
+}
+
 document.addEventListener(
     "touchend",
     function () {
 
-        pinchStartDistance = null;
-        pinchStartZoom = null;
+        finishPinch(true);
 
     },
     { passive: true }
@@ -1728,8 +1764,7 @@ document.addEventListener(
     "touchcancel",
     function () {
 
-        pinchStartDistance = null;
-        pinchStartZoom = null;
+        finishPinch(false);
 
     },
     { passive: true }
