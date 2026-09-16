@@ -680,6 +680,9 @@ main {
     background: #1f2937;
 
     padding: 40px;
+
+    touch-action: pan-x pan-y;
+    -webkit-overflow-scrolling: touch;
 }
 
 
