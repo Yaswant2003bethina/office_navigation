@@ -27,6 +27,7 @@ let currentPage = 1;
 let zoom = 1;
 let rotation = 0;
 let activeRenderTask = null;
+let zoomRenderTimer = null;
 let pinchStartDistance = null;
 let pinchStartZoom = null;
 let pinchRenderFrame = null;
@@ -35,6 +36,7 @@ const MAX_ZOOM = 5;
 
 let currentTextItems = [];
 let currentSearchResults = [];
+let pageTextCache = new Map();
 
 let currentObjectUrl = null;
 
@@ -515,6 +517,7 @@ async function openMap(id) {
 
         currentSearchResults = [];
         currentTextItems = [];
+        pageTextCache = new Map();
 
         const viewerTitle =
             document.getElementById("viewerTitle");
@@ -690,11 +693,8 @@ async function renderPage(pageNumber) {
 
         const outputScale =
             Math.min(
-                3,
-                Math.max(
-                    window.devicePixelRatio || 1,
-                    2
-                )
+                2,
+                window.devicePixelRatio || 1
             );
 
         canvas.width =
@@ -805,10 +805,19 @@ async function getTextItems(
     viewport
 ) {
 
-    const content =
-        await page.getTextContent();
+    let contentItems = pageTextCache.get(currentPage);
 
-    return content.items.map(
+    if (!contentItems) {
+
+        const content =
+            await page.getTextContent();
+
+        contentItems = content.items;
+        pageTextCache.set(currentPage, contentItems);
+
+    }
+
+    return contentItems.map(
         function (item) {
 
             const transform =
@@ -865,7 +874,20 @@ function changeZoom(delta) {
         zoom + delta
     );
 
-    renderPage(currentPage);
+    scheduleZoomRender();
+
+}
+
+function scheduleZoomRender() {
+
+    clearTimeout(zoomRenderTimer);
+
+    zoomRenderTimer = setTimeout(function () {
+
+        zoomRenderTimer = null;
+        renderPage(currentPage);
+
+    }, 120);
 
 }
 
@@ -1681,7 +1703,7 @@ document.addEventListener(
             pinchRenderFrame = requestAnimationFrame(function () {
 
                 pinchRenderFrame = null;
-                renderPage(currentPage);
+                scheduleZoomRender();
 
             });
 
@@ -1807,182 +1829,10 @@ function clearSearch() {
 
 
 /* =========================================================
-   DOWNLOAD PDF
-   ========================================================= */
-
-function downloadCurrentMap() {
-
-    if (!currentMap) {
-
-        toast(
-            "No floor map is open."
-        );
-
-        return;
-
-    }
-
-    const link =
-        document.createElement(
-            "a"
-        );
-
-    const url =
-        URL.createObjectURL(
-            currentMap.file
-        );
-
-    link.href = url;
-
-    link.download =
-        currentMap.name
-            .replace(/\.pdf$/i, "") +
-        ".pdf";
-
-    document.body.appendChild(
-        link
-    );
-
-    link.click();
-
-    document.body.removeChild(
-        link
-    );
-
-    setTimeout(function () {
-
-        URL.revokeObjectURL(
-            url
-        );
-
-    }, 1000);
-
-}
-
-
-/* =========================================================
-   ADMIN LOGIN
-   ========================================================= */
-
-function adminLoginSubmit(event) {
-
-    event.preventDefault();
-
-    const username =
-        document
-            .getElementById(
-                "adminUsername"
-            )
-            .value
-            .trim();
-
-    const password =
-        document
-            .getElementById(
-                "adminPassword"
-            )
-            .value;
-
-    /*
-       DEMO LOGIN
-
-       Username:
-       admin
-
-       Password:
-       admin123
-    */
-
-    if (
-        username === "admin" &&
-        password === "admin123"
-    ) {
-
-        sessionStorage.setItem(
-            "officeAdmin",
-            "1"
-        );
-
-        toast(
-            "Admin login successful"
-        );
-
-        renderAdmin();
-
-    } else {
-
-        toast(
-            "Invalid admin username or password"
-        );
-
-    }
-
-}
-
-
-/* =========================================================
-   ADMIN LOGOUT
-   ========================================================= */
-
-function adminLogout() {
-
-    sessionStorage.removeItem(
-        "officeAdmin"
-    );
-
-    toast(
-        "Admin logged out"
-    );
-
-    renderAdmin();
-
-}
-
-
-/* =========================================================
    ADMIN PAGE
    ========================================================= */
 
 async function renderAdmin() {
-
-    const logged =
-        sessionStorage.getItem(
-            "officeAdmin"
-        ) === "1";
-
-    const login =
-        document.getElementById(
-            "adminLogin"
-        );
-
-    const panel =
-        document.getElementById(
-            "adminPanel"
-        );
-
-    if (login) {
-
-        login.classList.toggle(
-            "hidden",
-            logged
-        );
-
-    }
-
-    if (panel) {
-
-        panel.classList.toggle(
-            "hidden",
-            !logged
-        );
-
-    }
-
-    if (!logged) {
-
-        return;
-
-    }
 
     try {
 
@@ -2129,21 +1979,6 @@ async function renderAdmin() {
    ========================================================= */
 
 async function addMap() {
-
-    if (
-        sessionStorage.getItem(
-            "officeAdmin"
-        ) !== "1"
-    ) {
-
-        toast(
-            "Please login as admin"
-        );
-
-        return;
-
-    }
-
     const nameInput =
         document.getElementById(
             "mapName"

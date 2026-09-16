@@ -10,8 +10,7 @@
     <link rel="stylesheet" href="style.css">
 
     <!-- PDF.js -->
-   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-   <script src="app.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 
 <body>
@@ -51,7 +50,7 @@
             class="nav-btn"
             data-page="admin"
             onclick="showPage('admin')">
-            Admin
+            Upload Map
         </button>
 
     </nav>
@@ -121,15 +120,15 @@
         </h2>
 
         <p>
-            Sign in as Admin and upload your first
-            floor-plan PDF.
+            Upload your first floor-plan PDF to start
+            navigating the office.
         </p>
 
         <button
             class="primary"
             onclick="showPage('admin')">
 
-            Open Admin
+            Upload Map
 
         </button>
 
@@ -179,7 +178,11 @@
 
             <div class="viewer-actions">
 
-                <button onclick="changeZoom(-0.05)">
+                <button
+                    type="button"
+                    onclick="changeZoom(-0.05)"
+                    title="Zoom out"
+                    aria-label="Zoom out">
                     −
                 </button>
 
@@ -187,7 +190,11 @@
                     100%
                 </span>
 
-                <button onclick="changeZoom(0.05)">
+                <button
+                    type="button"
+                    onclick="changeZoom(0.05)"
+                    title="Zoom in"
+                    aria-label="Zoom in">
                     +
                 </button>
 
@@ -207,11 +214,14 @@
                     ↻
                 </button>
 
-                <button onclick="fitWidth()">
+                <button
+                    type="button"
+                    onclick="fitWidth()">
                     Fit Width
                 </button>
 
                 <button
+                    type="button"
                     class="icon-btn"
                     onclick="toggleMapEnhancement()"
                     title="Enhance map visibility"
@@ -220,6 +230,7 @@
                 </button>
 
                 <button
+                    type="button"
                     class="icon-btn"
                     onclick="toggleMapFullscreen()"
                     title="Enter fullscreen map"
@@ -308,74 +319,14 @@
 
 
 
-<!-- ================= ADMIN PAGE ================= -->
+<!-- ================= UPLOAD PAGE ================= -->
 
 <section id="adminPage" class="page">
 
 
-    <!-- LOGIN -->
-
-    <div
-        id="adminLogin"
-        class="auth-card">
-
-        <div class="auth-icon">
-            🔐
-        </div>
-
-        <h1>
-            Admin Login
-        </h1>
-
-        <p>
-            Manage the floor-plan maps available
-            to employees.
-        </p>
-
-
-        <form
-            onsubmit="adminLoginSubmit(event)">
-
-            <label>
-                Username
-            </label>
-
-            <input
-                id="adminUsername"
-                value="admin"
-                required>
-
-
-            <label>
-                Password
-            </label>
-
-            <input
-                id="adminPassword"
-                type="password"
-                placeholder="Enter password"
-                required>
-
-
-            <button
-                class="primary full"
-                type="submit">
-
-                Sign In
-
-            </button>
-
-        </form>
-
-    </div>
-
-
-
-    <!-- ADMIN DASHBOARD -->
-
     <div
         id="adminPanel"
-        class="admin-panel hidden">
+        class="admin-panel">
 
 
         <div class="admin-head">
@@ -383,11 +334,11 @@
             <div>
 
                 <span class="eyebrow">
-                    ADMIN PANEL
+                    UPLOAD MAP
                 </span>
 
                 <h1>
-                    Manage Floor Maps
+                    Upload Floor Maps
                 </h1>
 
                 <p>
@@ -398,14 +349,6 @@
 
             </div>
 
-
-            <button
-                class="secondary"
-                onclick="adminLogout()">
-
-                Logout
-
-            </button>
 
         </div>
 
@@ -448,6 +391,7 @@
 
 
                 <button
+                    type="button"
                     class="primary"
                     onclick="addMap()">
 
