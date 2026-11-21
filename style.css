@@ -849,7 +849,7 @@ main {
         0 8px 30px
         rgba(0,0,0,.35);
 
-    contain: layout paint;
+    contain: layout;
 
     transform-origin: center top;
 

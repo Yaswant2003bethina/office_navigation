@@ -27,9 +27,20 @@ let rotation = 0;
 let activeRenderTask = null;
 let renderRequestId = 0;
 let zoomRenderTimer = null;
+let zoomPreviewFrame = null;
+let zoomOffsetX = 0;
+let zoomOffsetY = 0;
+let zoomRenderAnchor = null;
+let renderedZoom = 1;
 let pinchStartDistance = null;
 let pinchStartZoom = null;
 let pinchZoomAnchor = null;
+let pinchStartClientX = null;
+let pinchStartClientY = null;
+let pinchStartTargetX = null;
+let pinchStartTargetY = null;
+let pinchStartOffsetX = null;
+let pinchStartOffsetY = null;
 
 const MAX_ZOOM = 5;
 
@@ -868,7 +879,16 @@ async function renderPage(pageNumber, zoomAnchor) {
         return;
     }
 
+    if (!zoomAnchor) {
+        clearTimeout(zoomRenderTimer);
+        zoomRenderTimer = null;
+        zoomRenderAnchor = null;
+    }
+
     const requestId = ++renderRequestId;
+    const requestedZoom = zoom;
+    const requestedRotation = rotation;
+    const requestedPdf = pdfDoc;
     let renderTask = null;
 
     try {
@@ -917,21 +937,27 @@ async function renderPage(pageNumber, zoomAnchor) {
 
         const viewport =
             page.getViewport({
-                scale: zoom,
-                rotation: rotation
+                scale: requestedZoom,
+                rotation: requestedRotation
             });
 
-        const canvas =
+        const visibleCanvas =
             document.getElementById(
                 "pdfCanvas"
             );
 
-        if (!canvas) {
+        if (!visibleCanvas) {
             return;
         }
 
+        const canvas =
+            document.createElement("canvas");
         const context =
             canvas.getContext("2d");
+
+        if (!context) {
+            throw new Error("Could not create the PDF render canvas.");
+        }
 
         const outputScale =
             Math.min(
@@ -975,16 +1001,37 @@ async function renderPage(pageNumber, zoomAnchor) {
         activeRenderTask = renderTask;
         await renderTask.promise;
 
-        if (requestId !== renderRequestId) {
+        if (
+            requestId !== renderRequestId ||
+            requestedPdf !== pdfDoc ||
+            requestedZoom !== zoom ||
+            requestedRotation !== rotation ||
+            (zoomAnchor && zoomRenderAnchor !== zoomAnchor)
+        ) {
+            if (activeRenderTask === renderTask) {
+                activeRenderTask = null;
+            }
             return;
         }
 
+        canvas.id = "pdfCanvas";
+        clearZoomPreview();
+        visibleCanvas.replaceWith(canvas);
+        renderedZoom = requestedZoom;
+
         if (zoomAnchor) {
             restoreZoomAnchor(zoomAnchor);
+        } else {
+            zoomOffsetX = 0;
+            zoomOffsetY = 0;
         }
 
         if (activeRenderTask === renderTask) {
             activeRenderTask = null;
+        }
+
+        if (zoomRenderAnchor === zoomAnchor) {
+            zoomRenderAnchor = null;
         }
 
         const pageNumberElement =
@@ -1039,6 +1086,9 @@ async function renderPage(pageNumber, zoomAnchor) {
     } catch (error) {
 
         if (error && error.name === "RenderingCancelledException") {
+            if (activeRenderTask === renderTask) {
+                activeRenderTask = null;
+            }
             return;
         }
 
@@ -1173,10 +1223,17 @@ function changeZoom(factor, clientX, clientY) {
             ? getZoomAnchor(clientX, clientY)
             : getZoomAnchor();
 
+    const previousZoom = zoom;
     zoom = clampZoom(
         zoom * factor
     );
 
+    if (zoom === previousZoom) {
+        return;
+    }
+
+    zoomRenderAnchor = zoomAnchor;
+    applyZoomPreview(zoomAnchor);
     scheduleZoomRender(zoomAnchor);
 
 }
@@ -1213,8 +1270,12 @@ function getZoomAnchor(clientX, clientY) {
             targetClientX - viewportRect.left - viewport.clientLeft,
         targetY:
             targetClientY - viewportRect.top - viewport.clientTop,
-        mapX: (targetClientX - canvasRect.left) / canvasRect.width,
-        mapY: (targetClientY - canvasRect.top) / canvasRect.height
+        mapX:
+            (targetClientX - canvasRect.left) /
+            canvasRect.width,
+        mapY:
+            (targetClientY - canvasRect.top) /
+            canvasRect.height
     };
 
 }
@@ -1242,25 +1303,84 @@ function restoreZoomAnchor(anchor) {
         anchor.mapY * canvasRect.height -
         (viewportRect.top + viewport.clientTop + anchor.targetY);
 
+    const updatedCanvasRect = canvasWrap.getBoundingClientRect();
+    const updatedViewportRect = viewport.getBoundingClientRect();
+
+    zoomOffsetX =
+        updatedViewportRect.left +
+        viewport.clientLeft +
+        anchor.targetX -
+        (updatedCanvasRect.left + anchor.mapX * updatedCanvasRect.width);
+    zoomOffsetY =
+        updatedViewportRect.top +
+        viewport.clientTop +
+        anchor.targetY -
+        (updatedCanvasRect.top + anchor.mapY * updatedCanvasRect.height);
+
+    applyZoomPreview(anchor);
+
+}
+
+function applyZoomPreview(anchor) {
+
+    const canvasWrap =
+        document.getElementById("canvasWrap");
+
+    if (!canvasWrap || !anchor) {
+        return;
+    }
+
+    if (zoomPreviewFrame !== null) {
+        cancelAnimationFrame(zoomPreviewFrame);
+    }
+
+    zoomPreviewFrame = requestAnimationFrame(function () {
+        zoomPreviewFrame = null;
+        const origin = {
+            x: anchor.mapX * canvasWrap.offsetWidth,
+            y: anchor.mapY * canvasWrap.offsetHeight
+        };
+
+        canvasWrap.style.transformOrigin =
+            origin.x + "px " +
+            origin.y + "px";
+        canvasWrap.style.transform =
+            "translate3d(" +
+            zoomOffsetX + "px, " +
+            zoomOffsetY + "px, 0) scale(" +
+            zoom / renderedZoom + ")";
+    });
+
 }
 
 function scheduleZoomRender(zoomAnchor) {
 
     clearTimeout(zoomRenderTimer);
+    zoomRenderAnchor = zoomAnchor;
 
     zoomRenderTimer = setTimeout(function () {
 
         zoomRenderTimer = null;
+
+        if (pinchStartDistance !== null) {
+            return;
+        }
+
         renderPage(currentPage, zoomAnchor);
 
-    }, 120);
+    }, 140);
 
 }
 
-function clearPinchPreview() {
+function clearZoomPreview() {
 
     const canvasWrap =
         document.getElementById("canvasWrap");
+
+    if (zoomPreviewFrame !== null) {
+        cancelAnimationFrame(zoomPreviewFrame);
+        zoomPreviewFrame = null;
+    }
 
     if (canvasWrap) {
 
@@ -1502,8 +1622,11 @@ function fitPage() {
 }
 
 function resetZoom() {
+    const zoomAnchor = getZoomAnchor();
     zoom = 1;
-    scheduleZoomRender();
+    zoomRenderAnchor = zoomAnchor;
+    applyZoomPreview(zoomAnchor);
+    scheduleZoomRender(zoomAnchor);
 }
 
 
@@ -2349,7 +2472,21 @@ document.addEventListener(
         pinchZoomAnchor =
             getZoomAnchor(midpointX, midpointY);
 
-        clearPinchPreview();
+        if (!pinchZoomAnchor) {
+            pinchStartDistance = null;
+            pinchStartZoom = null;
+            return;
+        }
+
+        const viewportRect = viewport.getBoundingClientRect();
+        pinchStartClientX = midpointX;
+        pinchStartClientY = midpointY;
+        pinchStartOffsetX = zoomOffsetX;
+        pinchStartOffsetY = zoomOffsetY;
+        pinchStartTargetX =
+            midpointX - viewportRect.left - viewport.clientLeft;
+        pinchStartTargetY =
+            midpointY - viewportRect.top - viewport.clientTop;
 
     },
     { passive: false }
@@ -2369,7 +2506,8 @@ document.addEventListener(
             !pdfDoc ||
             event.touches.length !== 2 ||
             pinchStartDistance === null ||
-            pinchStartZoom === null
+            pinchStartZoom === null ||
+            !pinchZoomAnchor
         ) {
             return;
         }
@@ -2378,6 +2516,8 @@ document.addEventListener(
 
         const touchA = event.touches[0];
         const touchB = event.touches[1];
+        const midpointX = (touchA.clientX + touchB.clientX) / 2;
+        const midpointY = (touchA.clientY + touchB.clientY) / 2;
         const currentDistance =
             Math.hypot(
                 touchB.clientX - touchA.clientX,
@@ -2392,23 +2532,18 @@ document.addEventListener(
             pinchStartZoom * ratio
         );
 
-        const canvasWrap =
-            document.getElementById("canvasWrap");
+        const viewportRect = viewport.getBoundingClientRect();
+        zoomOffsetX =
+            pinchStartOffsetX + midpointX - pinchStartClientX;
+        zoomOffsetY =
+            pinchStartOffsetY + midpointY - pinchStartClientY;
+        pinchZoomAnchor.targetX =
+            midpointX - viewportRect.left - viewport.clientLeft;
+        pinchZoomAnchor.targetY =
+            midpointY - viewportRect.top - viewport.clientTop;
 
-        if (canvasWrap) {
-
-            if (pinchZoomAnchor) {
-                canvasWrap.style.transformOrigin =
-                    pinchZoomAnchor.mapX * canvasWrap.offsetWidth +
-                    "px " +
-                    pinchZoomAnchor.mapY * canvasWrap.offsetHeight +
-                    "px";
-            }
-
-            canvasWrap.style.transform =
-                "scale(" + zoom / pinchStartZoom + ")";
-
-        }
+        zoomRenderAnchor = pinchZoomAnchor;
+        applyZoomPreview(pinchZoomAnchor);
 
     },
     { passive: false }
@@ -2423,16 +2558,34 @@ function finishPinch(commitZoom) {
     if (!commitZoom) {
 
         zoom = pinchStartZoom;
+        zoomOffsetX = pinchStartOffsetX;
+        zoomOffsetY = pinchStartOffsetY;
+        pinchZoomAnchor.targetX = pinchStartTargetX;
+        pinchZoomAnchor.targetY = pinchStartTargetY;
 
     }
 
+    const anchor = pinchZoomAnchor;
     pinchStartDistance = null;
     pinchStartZoom = null;
-    clearPinchPreview();
+    pinchStartClientX = null;
+    pinchStartClientY = null;
+    pinchStartTargetX = null;
+    pinchStartTargetY = null;
+    pinchStartOffsetX = null;
+    pinchStartOffsetY = null;
 
     if (commitZoom) {
 
-        scheduleZoomRender(pinchZoomAnchor);
+        scheduleZoomRender(anchor);
+
+    } else {
+
+        applyZoomPreview(anchor);
+
+        if (zoom !== renderedZoom) {
+            scheduleZoomRender(anchor);
+        }
 
     }
 
