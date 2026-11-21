@@ -4,22 +4,20 @@
    ========================================================= */
 
 /* =========================================================
-   PDF.JS CONFIGURATION
-   ========================================================= */
-
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-
-
-/* =========================================================
    DATABASE SETTINGS
    ========================================================= */
 
 const DB_NAME = "officeMapNavigatorDB";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = "maps";
+const PREVIEW_STORE = "mapPreviews";
+const PDFJS_SRC =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+const PDFJS_WORKER_SRC =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 let db = null;
+let pdfjsPromise = null;
 
 let currentMap = null;
 let pdfDoc = null;
@@ -44,6 +42,8 @@ let pdfGeneration = 0;
 
 let currentObjectUrl = null;
 let mapPreviewUrls = [];
+let previewObserver = null;
+const mapPreviewData = new WeakMap();
 
 
 /* =========================================================
@@ -67,6 +67,17 @@ async function initDB() {
 
                 database.createObjectStore(
                     STORE,
+                    {
+                        keyPath: "id"
+                    }
+                );
+
+            }
+
+            if (!database.objectStoreNames.contains(PREVIEW_STORE)) {
+
+                database.createObjectStore(
+                    PREVIEW_STORE,
                     {
                         keyPath: "id"
                     }
@@ -99,15 +110,106 @@ async function initDB() {
    GET OBJECT STORE
    ========================================================= */
 
-function getStore(mode = "readonly") {
+function getStore(mode = "readonly", storeName = STORE) {
 
     if (!db) {
         throw new Error("Database is not initialized.");
     }
 
     return db
-        .transaction(STORE, mode)
-        .objectStore(STORE);
+        .transaction(storeName, mode)
+        .objectStore(storeName);
+
+}
+
+function getMapPreview(id) {
+
+    return new Promise((resolve, reject) => {
+
+        const request =
+            getStore("readonly", PREVIEW_STORE).get(id);
+
+        request.onsuccess = function () {
+            resolve(request.result);
+        };
+
+        request.onerror = function () {
+            reject(request.error);
+        };
+
+    });
+
+}
+
+function saveMapPreview(preview) {
+
+    return new Promise((resolve, reject) => {
+
+        const request =
+            getStore("readwrite", PREVIEW_STORE).put(preview);
+
+        request.onsuccess = function () {
+            resolve();
+        };
+
+        request.onerror = function () {
+            reject(request.error);
+        };
+
+    });
+
+}
+
+function deleteMapPreview(id) {
+
+    return new Promise((resolve, reject) => {
+
+        const request =
+            getStore("readwrite", PREVIEW_STORE).delete(id);
+
+        request.onsuccess = function () {
+            resolve();
+        };
+
+        request.onerror = function () {
+            reject(request.error);
+        };
+
+    });
+
+}
+
+function loadPdfJs() {
+
+    if (typeof pdfjsLib !== "undefined") {
+        return Promise.resolve(pdfjsLib);
+    }
+
+    if (!pdfjsPromise) {
+        pdfjsPromise = new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = PDFJS_SRC;
+            script.async = true;
+            script.onload = function () {
+                if (typeof pdfjsLib === "undefined") {
+                    pdfjsPromise = null;
+                    reject(new Error("PDF.js loaded without defining pdfjsLib."));
+                    return;
+                }
+
+                pdfjsLib.GlobalWorkerOptions.workerSrc =
+                    PDFJS_WORKER_SRC;
+                resolve(pdfjsLib);
+            };
+            script.onerror = function () {
+                pdfjsPromise = null;
+                reject(new Error("Unable to load PDF.js."));
+            };
+            document.head.appendChild(script);
+        });
+    }
+
+    return pdfjsPromise;
 
 }
 
@@ -398,6 +500,10 @@ async function renderHome() {
             return;
         }
 
+        if (previewObserver) {
+            previewObserver.disconnect();
+        }
+
         mapPreviewUrls.forEach(function (url) {
             URL.revokeObjectURL(url);
         });
@@ -426,41 +532,13 @@ async function renderHome() {
 
             card.className = "map-card";
 
-            let url = "";
-
-            try {
-
-                url = URL.createObjectURL(map.file);
-                mapPreviewUrls.push(url);
-
-            } catch (error) {
-
-                console.error(
-                    "Could not create PDF URL:",
-                    error
-                );
-
-            }
-
             card.innerHTML = `
 
                 <div class="map-thumb">
 
-                    ${
-                        url
-                            ? `
-                                <iframe
-                                    src="${url}#toolbar=0&navpanes=0&scrollbar=0"
-                                    loading="lazy"
-                                    title="${escapeHtml(map.name)}">
-                                </iframe>
-                              `
-                            : `
-                                <div class="map-preview-error">
-                                    PDF preview unavailable
-                                </div>
-                              `
-                    }
+                    <div class="map-preview-loading" aria-hidden="true">
+                        Loading preview...
+                    </div>
 
                 </div>
 
@@ -492,6 +570,38 @@ async function renderHome() {
 
             grid.appendChild(card);
 
+            const thumb =
+                card.querySelector(".map-thumb");
+
+            if (thumb && "IntersectionObserver" in window) {
+                if (!previewObserver) {
+                    previewObserver =
+                        new IntersectionObserver(function (entries) {
+                            entries.forEach(function (entry) {
+                                if (!entry.isIntersecting) {
+                                    return;
+                                }
+
+                                previewObserver.unobserve(entry.target);
+                                renderMapPreview(
+                                    mapPreviewData.get(entry.target),
+                                    entry.target
+                                );
+                            });
+                        }, { rootMargin: "160px" });
+                }
+
+                mapPreviewData.set(thumb, map);
+                previewObserver.observe(thumb);
+            }
+
+        }
+
+        if (!("IntersectionObserver" in window)) {
+            const thumbs = grid.querySelectorAll(".map-thumb");
+            thumbs.forEach(function (thumb, index) {
+                renderMapPreview(maps[index], thumb);
+            });
         }
 
     } catch (error) {
@@ -500,6 +610,95 @@ async function renderHome() {
 
         toast("Unable to load floor maps.");
 
+    }
+
+}
+
+
+async function renderMapPreview(map, thumb) {
+
+    try {
+        const cachedPreview = await getMapPreview(map.id);
+        let previewBlob =
+            cachedPreview &&
+            cachedPreview.fileSize === map.file.size &&
+            cachedPreview.fileLastModified === map.file.lastModified
+                ? cachedPreview.blob
+                : null;
+
+        if (!previewBlob) {
+            const pdfjs = await loadPdfJs();
+            const pdf = await pdfjs.getDocument({
+                data: await map.file.arrayBuffer()
+            }).promise;
+
+            try {
+                const page = await pdf.getPage(1);
+                const baseViewport = page.getViewport({ scale: 1 });
+                const viewport = page.getViewport({
+                    scale: Math.min(1, 320 / baseViewport.width)
+                });
+                const canvas = document.createElement("canvas");
+                const context = canvas.getContext("2d");
+
+                if (!context) {
+                    throw new Error("Could not create a map preview canvas.");
+                }
+
+                canvas.width = Math.ceil(viewport.width);
+                canvas.height = Math.ceil(viewport.height);
+                await page.render({
+                    canvasContext: context,
+                    viewport: viewport
+                }).promise;
+
+                previewBlob = await new Promise((resolve, reject) => {
+                    canvas.toBlob(function (blob) {
+                        if (blob) {
+                            resolve(blob);
+                        } else {
+                            reject(new Error("Could not encode the map preview."));
+                        }
+                    }, "image/jpeg", 0.65);
+                });
+
+                canvas.width = 0;
+                canvas.height = 0;
+
+                try {
+                    await saveMapPreview({
+                        id: map.id,
+                        fileSize: map.file.size,
+                        fileLastModified: map.file.lastModified,
+                        blob: previewBlob
+                    });
+                } catch (error) {
+                    console.error("Could not cache map preview:", error);
+                }
+            } finally {
+                await pdf.destroy();
+            }
+        }
+
+        if (!thumb.isConnected) {
+            return;
+        }
+
+        const image = document.createElement("img");
+        const previewUrl = URL.createObjectURL(previewBlob);
+        mapPreviewUrls.push(previewUrl);
+        image.src = previewUrl;
+        image.alt = map.name + " preview";
+        image.loading = "lazy";
+        image.decoding = "async";
+        thumb.replaceChildren(image);
+    } catch (error) {
+        console.error("Could not render map preview:", error);
+
+        if (thumb.isConnected) {
+            thumb.innerHTML =
+                '<div class="map-preview-error">PDF preview unavailable</div>';
+        }
     }
 
 }
@@ -622,18 +821,10 @@ async function loadPdf(url) {
 
     try {
 
-        if (typeof pdfjsLib === "undefined") {
-
-            toast(
-                "PDF.js failed to load. Check index.html."
-            );
-
-            return;
-
-        }
+        const pdfjs = await loadPdfJs();
 
         pdfDoc =
-            await pdfjsLib
+            await pdfjs
                 .getDocument({
                     url: url
                 })
@@ -881,12 +1072,13 @@ async function getTextItems(
 
     const contentItems =
         await getPageTextItems(pageNumber, page);
+    const pdfjs = await loadPdfJs();
 
     return contentItems.map(
         function (item) {
 
             const transform =
-                pdfjsLib.Util.transform(
+                pdfjs.Util.transform(
                     viewport.transform,
                     item.transform
                 );
@@ -1007,20 +1199,22 @@ function getZoomAnchor(clientX, clientY) {
         return null;
     }
 
-    const targetX =
+    const targetClientX =
         typeof clientX === "number"
             ? clientX
             : viewportRect.left + viewport.clientLeft + viewport.clientWidth / 2;
-    const targetY =
+    const targetClientY =
         typeof clientY === "number"
             ? clientY
             : viewportRect.top + viewport.clientTop + viewport.clientHeight / 2;
 
     return {
-        targetX: targetX,
-        targetY: targetY,
-        mapX: (targetX - canvasRect.left) / canvasRect.width,
-        mapY: (targetY - canvasRect.top) / canvasRect.height
+        targetX:
+            targetClientX - viewportRect.left - viewport.clientLeft,
+        targetY:
+            targetClientY - viewportRect.top - viewport.clientTop,
+        mapX: (targetClientX - canvasRect.left) / canvasRect.width,
+        mapY: (targetClientY - canvasRect.top) / canvasRect.height
     };
 
 }
@@ -1032,16 +1226,21 @@ function restoreZoomAnchor(anchor) {
     const canvasWrap =
         document.getElementById("canvasWrap");
 
-    if (!viewport || !canvasWrap) {
+    if (!viewport || !canvasWrap || !anchor) {
         return;
     }
 
+    const viewportRect = viewport.getBoundingClientRect();
     const canvasRect = canvasWrap.getBoundingClientRect();
 
     viewport.scrollLeft +=
-        canvasRect.left + anchor.mapX * canvasRect.width - anchor.targetX;
+        canvasRect.left +
+        anchor.mapX * canvasRect.width -
+        (viewportRect.left + viewport.clientLeft + anchor.targetX);
     viewport.scrollTop +=
-        canvasRect.top + anchor.mapY * canvasRect.height - anchor.targetY;
+        canvasRect.top +
+        anchor.mapY * canvasRect.height -
+        (viewportRect.top + viewport.clientTop + anchor.targetY);
 
 }
 
@@ -2653,6 +2852,12 @@ async function removeMap(id) {
     try {
 
         await deleteMap(id);
+
+        try {
+            await deleteMapPreview(id);
+        } catch (error) {
+            console.error("Could not delete the cached map preview:", error);
+        }
 
         /*
            If currently opened map is deleted,

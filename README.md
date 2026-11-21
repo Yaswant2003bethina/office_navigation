@@ -8,4 +8,4 @@ A browser-based office floor-map navigator. Upload floor-plan PDFs, open a map, 
 - Enter a current room and destination room to find and mark both on the map. Room labels split across adjacent PDF text fragments are supported.
 - Zoom with the `+` and `−` controls, pinch on touchscreens, or use `Ctrl`/`⌘` plus the mouse wheel.
 - Use **Fit Width**, **Fit Page**, or **100%** to change the view.
-- Uploaded maps are stored in the browser on the current device.
+- Uploaded maps and compressed first-page previews are cached in the browser on the current device. PDF.js and map previews load only when needed.
