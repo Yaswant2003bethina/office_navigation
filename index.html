@@ -180,7 +180,7 @@
 
                 <button
                     type="button"
-                    onclick="changeZoom(-0.05)"
+                    onclick="changeZoom(1 / 1.2)"
                     title="Zoom out"
                     aria-label="Zoom out">
                     −
@@ -192,7 +192,7 @@
 
                 <button
                     type="button"
-                    onclick="changeZoom(0.05)"
+                    onclick="changeZoom(1.2)"
                     title="Zoom in"
                     aria-label="Zoom in">
                     +
@@ -279,6 +279,31 @@
             </button>
 
         </div>
+
+
+        <form class="room-routebar" onsubmit="searchRooms(); return false;">
+
+            <label>
+                <span>Current room</span>
+                <input
+                    id="currentRoom"
+                    type="search"
+                    placeholder="e.g. Room 101"
+                    autocomplete="off">
+            </label>
+
+            <label>
+                <span>Destination room</span>
+                <input
+                    id="destinationRoom"
+                    type="search"
+                    placeholder="e.g. Conference Room"
+                    autocomplete="off">
+            </label>
+
+            <button type="submit">Find Rooms</button>
+
+        </form>
 
 
 

@@ -35,6 +35,7 @@ const MAX_ZOOM = 5;
 
 let currentTextItems = [];
 let currentSearchResults = [];
+let roomLocations = {};
 let pageTextCache = new Map();
 
 let currentObjectUrl = null;
@@ -515,6 +516,7 @@ async function openMap(id) {
         rotation = 0;
 
         currentSearchResults = [];
+        roomLocations = {};
         currentTextItems = [];
         pageTextCache = new Map();
 
@@ -536,6 +538,18 @@ async function openMap(id) {
             searchInput.value = "";
 
         }
+
+        ["currentRoom", "destinationRoom"].forEach(
+            function (id) {
+
+                const input = document.getElementById(id);
+
+                if (input) {
+                    input.value = "";
+                }
+
+            }
+        );
 
         const results =
             document.getElementById("searchResults");
@@ -692,7 +706,7 @@ async function renderPage(pageNumber) {
 
         const outputScale =
             Math.min(
-                2,
+                3,
                 window.devicePixelRatio || 1
             );
 
@@ -765,7 +779,11 @@ async function renderPage(pageNumber) {
                 viewport
             );
 
-        if (currentSearchResults.length) {
+        if (Object.keys(roomLocations).length) {
+
+            showRoomMarkers();
+
+        } else if (currentSearchResults.length) {
 
             showMarkerForResult(
                 currentSearchResults[0]
@@ -867,10 +885,10 @@ function clampZoom(value) {
 
 }
 
-function changeZoom(delta) {
+function changeZoom(factor) {
 
     zoom = clampZoom(
-        zoom + delta
+        zoom * factor
     );
 
     scheduleZoomRender();
@@ -1045,21 +1063,20 @@ function fitWidth() {
                     rotation: rotation
                 });
 
+            const styles = getComputedStyle(viewport);
+            const horizontalPadding =
+                parseFloat(styles.paddingLeft) +
+                parseFloat(styles.paddingRight);
+
             const availableWidth =
                 Math.max(
                     100,
-                    viewport.clientWidth - 60
+                    viewport.clientWidth - horizontalPadding - 12
                 );
 
-            zoom =
-                Math.max(
-                    0.35,
-                    Math.min(
-                        MAX_ZOOM,
-                        availableWidth /
-                        base.width
-                    )
-                );
+            zoom = clampZoom(
+                availableWidth / base.width
+            );
 
             renderPage(currentPage);
 
@@ -1067,6 +1084,7 @@ function fitWidth() {
         .catch(function (error) {
 
             console.error(error);
+            toast("Unable to fit the PDF page to width.");
 
         });
 
@@ -1148,6 +1166,8 @@ async function searchPlace() {
         input.value
             .trim()
             .toLowerCase();
+
+    roomLocations = {};
 
     const resultBox =
         document.getElementById(
@@ -1328,6 +1348,216 @@ async function searchPlace() {
         `;
 
     }
+
+}
+
+
+async function searchRooms() {
+
+    if (!pdfDoc) {
+
+        toast("Open a floor map first.");
+        return;
+
+    }
+
+    const currentInput =
+        document.getElementById("currentRoom");
+
+    const destinationInput =
+        document.getElementById("destinationRoom");
+
+    const resultBox =
+        document.getElementById("searchResults");
+
+    if (!currentInput || !destinationInput || !resultBox) {
+        return;
+    }
+
+    const currentQuery = currentInput.value.trim();
+    const destinationQuery = destinationInput.value.trim();
+
+    if (!currentQuery || !destinationQuery) {
+        toast("Enter both a current room and a destination room.");
+        return;
+    }
+
+    currentSearchResults = [];
+    roomLocations = {};
+
+    const markerLayer = document.getElementById("markerLayer");
+
+    if (markerLayer) {
+        markerLayer.innerHTML = "";
+    }
+
+    resultBox.classList.remove("hidden");
+    resultBox.innerHTML = `
+        <div class="search-result">
+            <span>Finding both rooms in this floor map...</span>
+        </div>
+    `;
+
+    try {
+
+        const [current, destination] = await Promise.all([
+            findRoomInPdf(currentQuery),
+            findRoomInPdf(destinationQuery)
+        ]);
+
+        if (!current || !destination) {
+
+            const missing = [];
+
+            if (!current) {
+                missing.push(`current room "${escapeHtml(currentQuery)}"`);
+            }
+
+            if (!destination) {
+                missing.push(`destination room "${escapeHtml(destinationQuery)}"`);
+            }
+
+            resultBox.innerHTML = `
+                <div class="search-result">
+                    <span>Could not find ${missing.join(" and ")} in this PDF.</span>
+                </div>
+            `;
+
+            return;
+
+        }
+
+        roomLocations = { current, destination };
+        currentSearchResults = [];
+
+        resultBox.innerHTML = `
+            ${[
+                ["current", "Current room", current],
+                ["destination", "Destination room", destination]
+            ].map(function ([key, label, room]) {
+                return `
+                    <div class="search-result">
+                        <span>
+                            <b>${label}:</b>
+                            ${escapeHtml(room.text)}
+                            · Page ${room.page}
+                        </span>
+                        <button onclick="jumpToRoom('${key}')">Show on Map</button>
+                    </div>
+                `;
+            }).join("")}
+        `;
+
+        await jumpToRoom("destination");
+
+    } catch (error) {
+
+        console.error("Room search error:", error);
+        resultBox.innerHTML = `
+            <div class="search-result">
+                <span>Room search failed.</span>
+            </div>
+        `;
+
+    }
+
+}
+
+
+async function findRoomInPdf(query) {
+
+    const normalizedQuery = query.toLowerCase();
+
+    for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber++) {
+
+        let items = pageTextCache.get(pageNumber);
+
+        if (!items) {
+
+            const page = await pdfDoc.getPage(pageNumber);
+            const content = await page.getTextContent();
+            items = content.items;
+            pageTextCache.set(pageNumber, items);
+
+        }
+
+        const match = items.find(function (item) {
+
+            return (item.str || "")
+                .toLowerCase()
+                .includes(normalizedQuery);
+
+        });
+
+        if (match) {
+            return {
+                page: pageNumber,
+                text: match.str
+            };
+        }
+
+    }
+
+    return null;
+
+}
+
+
+async function jumpToRoom(roomKey) {
+
+    const room = roomLocations[roomKey];
+
+    if (!room) {
+        return;
+    }
+
+    await renderPage(room.page);
+
+}
+
+
+function showRoomMarkers() {
+
+    const layer = document.getElementById("markerLayer");
+
+    if (!layer) {
+        return;
+    }
+
+    layer.innerHTML = "";
+
+    ["current", "destination"].forEach(function (roomKey) {
+
+        const room = roomLocations[roomKey];
+
+        if (!room || room.page !== currentPage) {
+            return;
+        }
+
+        const match = currentTextItems.find(function (item) {
+            return item.text === room.text;
+        });
+
+        if (!match) {
+            return;
+        }
+
+        const marker = document.createElement("div");
+        marker.className = `marker ${roomKey}-room-marker`;
+        marker.style.left =
+            match.x + Math.max(match.width, 20) / 2 + "px";
+        marker.style.top = match.y - match.height - 12 + "px";
+        marker.title =
+            `${roomKey === "current" ? "Current room" : "Destination"}: ${room.text}`;
+
+        const label = document.createElement("span");
+        label.className = "marker-label";
+        label.textContent =
+            `${roomKey === "current" ? "Current" : "Destination"}: ${room.text}`;
+        marker.appendChild(label);
+        layer.appendChild(marker);
+
+    });
 
 }
 
@@ -1791,8 +2021,8 @@ document.addEventListener(
 
         changeZoom(
             event.deltaY < 0
-                ? 0.05
-                : -0.05
+                ? 1.1
+                : 1 / 1.1
         );
 
     },
@@ -1816,6 +2046,20 @@ function clearSearch() {
         input.value = "";
 
     }
+
+    ["currentRoom", "destinationRoom"].forEach(
+        function (id) {
+
+            const roomInput = document.getElementById(id);
+
+            if (roomInput) {
+                roomInput.value = "";
+            }
+
+        }
+    );
+
+    roomLocations = {};
 
     const resultBox =
         document.getElementById(
