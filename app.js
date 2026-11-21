@@ -27,9 +27,11 @@ let currentPage = 1;
 let zoom = 1;
 let rotation = 0;
 let activeRenderTask = null;
+let renderRequestId = 0;
 let zoomRenderTimer = null;
 let pinchStartDistance = null;
 let pinchStartZoom = null;
+let pinchZoomAnchor = null;
 
 const MAX_ZOOM = 5;
 
@@ -37,8 +39,11 @@ let currentTextItems = [];
 let currentSearchResults = [];
 let roomLocations = {};
 let pageTextCache = new Map();
+let pageTextPromises = new Map();
+let pdfGeneration = 0;
 
 let currentObjectUrl = null;
+let mapPreviewUrls = [];
 
 
 /* =========================================================
@@ -393,6 +398,11 @@ async function renderHome() {
             return;
         }
 
+        mapPreviewUrls.forEach(function (url) {
+            URL.revokeObjectURL(url);
+        });
+        mapPreviewUrls = [];
+
         empty.classList.toggle(
             "hidden",
             maps.length > 0
@@ -421,6 +431,7 @@ async function renderHome() {
             try {
 
                 url = URL.createObjectURL(map.file);
+                mapPreviewUrls.push(url);
 
             } catch (error) {
 
@@ -440,6 +451,7 @@ async function renderHome() {
                             ? `
                                 <iframe
                                     src="${url}#toolbar=0&navpanes=0&scrollbar=0"
+                                    loading="lazy"
                                     title="${escapeHtml(map.name)}">
                                 </iframe>
                               `
@@ -519,6 +531,8 @@ async function openMap(id) {
         roomLocations = {};
         currentTextItems = [];
         pageTextCache = new Map();
+        pageTextPromises = new Map();
+        pdfGeneration++;
 
         const viewerTitle =
             document.getElementById("viewerTitle");
@@ -657,19 +671,38 @@ async function loadPdf(url) {
    RENDER PDF PAGE
    ========================================================= */
 
-async function renderPage(pageNumber) {
+async function renderPage(pageNumber, zoomAnchor) {
 
     if (!pdfDoc) {
         return;
     }
 
+    const requestId = ++renderRequestId;
+    let renderTask = null;
+
     try {
 
         if (activeRenderTask) {
 
-            activeRenderTask.cancel();
-            activeRenderTask = null;
+            const previousTask = activeRenderTask;
+            previousTask.cancel();
 
+            try {
+                await previousTask.promise;
+            } catch (error) {
+                if (!error || error.name !== "RenderingCancelledException") {
+                    throw error;
+                }
+            }
+
+            if (activeRenderTask === previousTask) {
+                activeRenderTask = null;
+            }
+
+        }
+
+        if (requestId !== renderRequestId) {
+            return;
         }
 
         currentPage =
@@ -681,10 +714,15 @@ async function renderPage(pageNumber) {
                 )
             );
 
+        const requestedPage = currentPage;
         const page =
             await pdfDoc.getPage(
-                currentPage
+                requestedPage
             );
+
+        if (requestId !== renderRequestId) {
+            return;
+        }
 
         const viewport =
             page.getViewport({
@@ -726,7 +764,7 @@ async function renderPage(pageNumber) {
         canvas.style.height =
             Math.ceil(viewport.height) + "px";
 
-        activeRenderTask = page.render({
+        renderTask = page.render({
 
             canvasContext: context,
             viewport: viewport,
@@ -743,9 +781,20 @@ async function renderPage(pageNumber) {
 
         });
 
-        await activeRenderTask.promise;
+        activeRenderTask = renderTask;
+        await renderTask.promise;
 
-        activeRenderTask = null;
+        if (requestId !== renderRequestId) {
+            return;
+        }
+
+        if (zoomAnchor) {
+            restoreZoomAnchor(zoomAnchor);
+        }
+
+        if (activeRenderTask === renderTask) {
+            activeRenderTask = null;
+        }
 
         const pageNumberElement =
             document.getElementById(
@@ -775,9 +824,14 @@ async function renderPage(pageNumber) {
 
         currentTextItems =
             await getTextItems(
+                requestedPage,
                 page,
                 viewport
             );
+
+        if (requestId !== renderRequestId) {
+            return;
+        }
 
         if (Object.keys(roomLocations).length) {
 
@@ -797,7 +851,9 @@ async function renderPage(pageNumber) {
             return;
         }
 
-        activeRenderTask = null;
+        if (activeRenderTask === renderTask) {
+            activeRenderTask = null;
+        }
 
         console.error(
             "Page render error:",
@@ -818,21 +874,13 @@ async function renderPage(pageNumber) {
    ========================================================= */
 
 async function getTextItems(
+    pageNumber,
     page,
     viewport
 ) {
 
-    let contentItems = pageTextCache.get(currentPage);
-
-    if (!contentItems) {
-
-        const content =
-            await page.getTextContent();
-
-        contentItems = content.items;
-        pageTextCache.set(currentPage, contentItems);
-
-    }
+    const contentItems =
+        await getPageTextItems(pageNumber, page);
 
     return contentItems.map(
         function (item) {
@@ -853,18 +901,58 @@ async function getTextItems(
 
                 width:
                     Math.abs(
-                        item.width * zoom
+                        item.width * viewport.scale
                     ),
 
                 height:
                     Math.abs(
-                        item.height * zoom
+                        item.height * viewport.scale
                     ) || 14
 
             };
 
         }
     );
+
+}
+
+async function getPageTextItems(pageNumber, page) {
+
+    const cachedItems = pageTextCache.get(pageNumber);
+
+    if (cachedItems) {
+        return cachedItems;
+    }
+
+    let textPromise = pageTextPromises.get(pageNumber);
+
+    if (!textPromise) {
+        const generation = pdfGeneration;
+        textPromise = (async function () {
+            try {
+                const textPage = page || await pdfDoc.getPage(pageNumber);
+                const content = await textPage.getTextContent();
+
+                if (generation === pdfGeneration) {
+                    pageTextCache.set(pageNumber, content.items);
+                }
+                if (pageTextPromises.get(pageNumber) === textPromise) {
+                    pageTextPromises.delete(pageNumber);
+                }
+
+                return content.items;
+            } catch (error) {
+                if (pageTextPromises.get(pageNumber) === textPromise) {
+                    pageTextPromises.delete(pageNumber);
+                }
+                throw error;
+            }
+        })();
+
+        pageTextPromises.set(pageNumber, textPromise);
+    }
+
+    return textPromise;
 
 }
 
@@ -885,24 +973,86 @@ function clampZoom(value) {
 
 }
 
-function changeZoom(factor) {
+function changeZoom(factor, clientX, clientY) {
+
+    const zoomAnchor =
+        typeof clientX === "number" &&
+        typeof clientY === "number"
+            ? getZoomAnchor(clientX, clientY)
+            : getZoomAnchor();
 
     zoom = clampZoom(
         zoom * factor
     );
 
-    scheduleZoomRender();
+    scheduleZoomRender(zoomAnchor);
 
 }
 
-function scheduleZoomRender() {
+function getZoomAnchor(clientX, clientY) {
+
+    const viewport =
+        document.getElementById("pdfViewport");
+    const canvasWrap =
+        document.getElementById("canvasWrap");
+
+    if (!viewport || !canvasWrap) {
+        return null;
+    }
+
+    const viewportRect = viewport.getBoundingClientRect();
+    const canvasRect = canvasWrap.getBoundingClientRect();
+
+    if (!canvasRect.width || !canvasRect.height) {
+        return null;
+    }
+
+    const targetX =
+        typeof clientX === "number"
+            ? clientX
+            : viewportRect.left + viewport.clientLeft + viewport.clientWidth / 2;
+    const targetY =
+        typeof clientY === "number"
+            ? clientY
+            : viewportRect.top + viewport.clientTop + viewport.clientHeight / 2;
+
+    return {
+        targetX: targetX,
+        targetY: targetY,
+        mapX: (targetX - canvasRect.left) / canvasRect.width,
+        mapY: (targetY - canvasRect.top) / canvasRect.height
+    };
+
+}
+
+function restoreZoomAnchor(anchor) {
+
+    const viewport =
+        document.getElementById("pdfViewport");
+    const canvasWrap =
+        document.getElementById("canvasWrap");
+
+    if (!viewport || !canvasWrap) {
+        return;
+    }
+
+    const canvasRect = canvasWrap.getBoundingClientRect();
+
+    viewport.scrollLeft +=
+        canvasRect.left + anchor.mapX * canvasRect.width - anchor.targetX;
+    viewport.scrollTop +=
+        canvasRect.top + anchor.mapY * canvasRect.height - anchor.targetY;
+
+}
+
+function scheduleZoomRender(zoomAnchor) {
 
     clearTimeout(zoomRenderTimer);
 
     zoomRenderTimer = setTimeout(function () {
 
         zoomRenderTimer = null;
-        renderPage(currentPage);
+        renderPage(currentPage, zoomAnchor);
 
     }, 120);
 
@@ -916,6 +1066,7 @@ function clearPinchPreview() {
     if (canvasWrap) {
 
         canvasWrap.style.transform = "";
+        canvasWrap.style.transformOrigin = "";
 
     }
 
@@ -1090,6 +1241,72 @@ function fitWidth() {
 
 }
 
+function fitPage() {
+
+    if (!pdfDoc) {
+        return;
+    }
+
+    const viewport =
+        document.getElementById("pdfViewport");
+
+    if (!viewport) {
+        return;
+    }
+
+    pdfDoc
+        .getPage(currentPage)
+        .then(function (page) {
+
+            const base =
+                page.getViewport({
+                    scale: 1,
+                    rotation: rotation
+                });
+
+            const styles = getComputedStyle(viewport);
+            const horizontalPadding =
+                parseFloat(styles.paddingLeft) +
+                parseFloat(styles.paddingRight);
+            const verticalPadding =
+                parseFloat(styles.paddingTop) +
+                parseFloat(styles.paddingBottom);
+
+            const availableWidth =
+                Math.max(
+                    100,
+                    viewport.clientWidth - horizontalPadding - 12
+                );
+            const availableHeight =
+                Math.max(
+                    100,
+                    viewport.clientHeight - verticalPadding - 12
+                );
+
+            zoom = clampZoom(
+                Math.min(
+                    availableWidth / base.width,
+                    availableHeight / base.height
+                )
+            );
+
+            renderPage(currentPage);
+
+        })
+        .catch(function (error) {
+
+            console.error(error);
+            toast("Unable to fit the PDF page to the viewer.");
+
+        });
+
+}
+
+function resetZoom() {
+    zoom = 1;
+    scheduleZoomRender();
+}
+
 
 /* =========================================================
    PREVIOUS PAGE
@@ -1200,21 +1417,28 @@ async function searchPlace() {
            Search every PDF page
         */
 
-        for (
-            let pageNumber = 1;
-            pageNumber <= pdfDoc.numPages;
-            pageNumber++
-        ) {
+        const pageTexts = new Array(pdfDoc.numPages);
+        let nextPageNumber = 1;
 
-            const page =
-                await pdfDoc.getPage(
-                    pageNumber
-                );
+        async function readNextPage() {
+            while (nextPageNumber <= pdfDoc.numPages) {
+                const pageNumber = nextPageNumber++;
+                pageTexts[pageNumber - 1] = {
+                    pageNumber: pageNumber,
+                    items: await getPageTextItems(pageNumber)
+                };
+            }
+        }
 
-            const content =
-                await page.getTextContent();
+        await Promise.all(
+            Array.from(
+                { length: Math.min(4, pdfDoc.numPages) },
+                readNextPage
+            )
+        );
 
-            content.items.forEach(
+        pageTexts.forEach(function (pageText) {
+            pageText.items.forEach(
                 function (item) {
 
                     const text =
@@ -1228,7 +1452,7 @@ async function searchPlace() {
 
                         results.push({
 
-                            page: pageNumber,
+                            page: pageText.pageNumber,
 
                             text: text,
 
@@ -1240,8 +1464,7 @@ async function searchPlace() {
 
                 }
             );
-
-        }
+        });
 
         currentSearchResults =
             results;
@@ -1466,33 +1689,51 @@ async function searchRooms() {
 
 async function findRoomInPdf(query) {
 
-    const normalizedQuery = query.toLowerCase();
+    const normalizedQuery = normalizeRoomText(query);
 
     for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber++) {
 
-        let items = pageTextCache.get(pageNumber);
+        const items = await getPageTextItems(pageNumber);
+        const itemRanges = [];
+        let searchableText = "";
 
-        if (!items) {
+        items.forEach(function (item, itemIndex) {
 
-            const page = await pdfDoc.getPage(pageNumber);
-            const content = await page.getTextContent();
-            items = content.items;
-            pageTextCache.set(pageNumber, items);
+            const text = normalizeRoomText(item.str);
 
-        }
+            if (!text) {
+                return;
+            }
 
-        const match = items.find(function (item) {
+            if (searchableText) {
+                searchableText += " ";
+            }
 
-            return (item.str || "")
-                .toLowerCase()
-                .includes(normalizedQuery);
+            const start = searchableText.length;
+            searchableText += text;
+            itemRanges.push({
+                start: start,
+                end: searchableText.length,
+                itemIndex: itemIndex
+            });
 
         });
 
-        if (match) {
+        const matchIndex = searchableText.indexOf(normalizedQuery);
+
+        if (matchIndex !== -1) {
+            const matchedItem = itemRanges.find(function (range) {
+                return range.start <= matchIndex && range.end > matchIndex;
+            });
+
+            if (!matchedItem) {
+                continue;
+            }
+
             return {
                 page: pageNumber,
-                text: match.str
+                text: items[matchedItem.itemIndex].str,
+                itemIndex: matchedItem.itemIndex
             };
         }
 
@@ -1500,6 +1741,13 @@ async function findRoomInPdf(query) {
 
     return null;
 
+}
+
+function normalizeRoomText(text) {
+    return String(text || "")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
 }
 
 
@@ -1534,9 +1782,7 @@ function showRoomMarkers() {
             return;
         }
 
-        const match = currentTextItems.find(function (item) {
-            return item.text === room.text;
-        });
+        const match = currentTextItems[room.itemIndex];
 
         if (!match) {
             return;
@@ -1891,6 +2137,9 @@ document.addEventListener(
         const touchA = event.touches[0];
         const touchB = event.touches[1];
 
+        const midpointX = (touchA.clientX + touchB.clientX) / 2;
+        const midpointY = (touchA.clientY + touchB.clientY) / 2;
+
         pinchStartDistance =
             Math.hypot(
                 touchB.clientX - touchA.clientX,
@@ -1898,6 +2147,8 @@ document.addEventListener(
             );
 
         pinchStartZoom = zoom;
+        pinchZoomAnchor =
+            getZoomAnchor(midpointX, midpointY);
 
         clearPinchPreview();
 
@@ -1947,6 +2198,14 @@ document.addEventListener(
 
         if (canvasWrap) {
 
+            if (pinchZoomAnchor) {
+                canvasWrap.style.transformOrigin =
+                    pinchZoomAnchor.mapX * canvasWrap.offsetWidth +
+                    "px " +
+                    pinchZoomAnchor.mapY * canvasWrap.offsetHeight +
+                    "px";
+            }
+
             canvasWrap.style.transform =
                 "scale(" + zoom / pinchStartZoom + ")";
 
@@ -1974,9 +2233,11 @@ function finishPinch(commitZoom) {
 
     if (commitZoom) {
 
-        scheduleZoomRender();
+        scheduleZoomRender(pinchZoomAnchor);
 
     }
+
+    pinchZoomAnchor = null;
 
 }
 
@@ -2022,7 +2283,9 @@ document.addEventListener(
         changeZoom(
             event.deltaY < 0
                 ? 1.1
-                : 1 / 1.1
+                : 1 / 1.1,
+            event.clientX,
+            event.clientY
         );
 
     },
